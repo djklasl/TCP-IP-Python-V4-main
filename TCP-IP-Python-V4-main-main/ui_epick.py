@@ -619,6 +619,7 @@ class RobotUI(object):
         self.label_feed_dict[label[1][4]]["text"] = array_value[0][4]
         self.label_feed_dict[label[1][5]]["text"] = array_value[0][5]
 
+
 if __name__ == "__main__":
     ui = RobotUI()
     ui.pack()
