@@ -1440,43 +1440,24 @@ class DobotApiDashboard(DobotApi):
         string = string + ')'
         return self.sendRecvMsg(string)
 
-    def ModbusRTUCreate(self, slave_id, baud, parity='', data_bit=8, stop_bit=-1):
-        """
-        创建基于RS485接⼝的Modbus主站，并和从站建⽴连接。最多⽀持同时连接5个设备。
-        必选参数
-        参数名      类型      说明
-        slave_id    int       从站ID
-        baud        int       RS485接⼝的波特率。
-        可选参数
-        参数名 类型 说明
-        parity      string    
-        是否有奇偶校验位。"O"表⽰奇校验，"E"表⽰偶校验，"N"表⽰⽆奇偶
-        校验位。默认值为“E”。
-        data_bit    int       数据位⻓度。取值范围：8。默认值为8。
-        stop_bit    int       停⽌位⻓度。取值范围：1，2。默认值为1。
-        Create Modbus master station based on RS485, and establish connection with slave station (support connecting to at most 5 devices).
-        Required parameter:
-        Parameter name      Type      Description
-        slave_id    int       slave ID
-        baud        int       baud rate of RS485 interface.
-        Optional parameter:
-        Parameter name      Type      Description
-        parity      string    Whether there are parity bits. "O" means odd, "E" means even, and "N" means no parity bit. "E" by default.
-        data_bit    int       data bit length Range: 8 (8 by default).
-        stop_bit    int       stop bit length Range: 1, 2 (1 by default).
-        """
-        string = "ModbusRTUCreate({:d},{:d}".format(slave_id, baud)
-        params = []
-        if parity != '':
-            params.append('{:s}'.format(parity))
-        if data_bit != 8:
-            params.append('{:d}'.format(data_bit))
-        if stop_bit != -1:
-            params.append('{:d}'.format(stop_bit))
-        for ii in params:
-            string = string + ',' + ii
-        string = string + ')'
-        return self.sendRecvMsg(string)
+    def ModbusRTUCreate(self, slave_id, baud, parity='E', data_bit=8, stop_bit=1):
+            """
+            创建基于RS485接⼝的Modbus主站，并和从站建⽴连接。
+            
+            参数说明:
+            slave_id: 从站ID
+            baud:     波特率
+            parity:   校验位 "N", "O", "E" (默认E)
+            data_bit: 数据位 (默认8)
+            stop_bit: 停止位 (默认1)
+            """
+            # [修改点 1] 强制给 parity 加上双引号 \"{:s}\"
+            # [修改点 2] 移除 if 判断，强制发送所有参数，确保 data_bit 不会丢失
+            # 最终格式示例: ModbusRTUCreate(9,115200,"N",8,1)
+            string = 'ModbusRTUCreate({:d},{:d},"{:s}",{:d},{:d})'.format(
+                slave_id, baud, parity, data_bit, stop_bit)
+                
+            return self.sendRecvMsg(string)
 
     def ModbusClose(self, index):
         """
