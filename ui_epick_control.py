@@ -14,6 +14,8 @@ import json
 import threading
 import math
 import re
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from files.alarmController import alarm_controller_list
 from files.alarmServo import alarm_servo_list
 
@@ -164,6 +166,9 @@ class RobotUI(object):
         self.button_list = []
         self.entry_dict = {}
         self.epick = None
+        self.force_plot_window = None
+        self.force_plot_running = False
+        self.force_plot_thread = None
 
         # 1. Robot Connect
         self.frame_robot = LabelFrame(self.root, text="Robot Connect",
@@ -255,6 +260,11 @@ class RobotUI(object):
         self.set_move(text="J5:", label_value=410, default_value="90", entry_value=440, rely=0.5, master=self.frame_move)
         self.set_move(text="J6:", label_value=510, default_value="120", entry_value=540, rely=0.5, master=self.frame_move)
         self.set_button(master=self.frame_move, text="MovJ", rely=0.45, x=610, command=self.joint_movj)
+
+        # 力曲线绘制按钮（弹出新窗口）
+        self.button_force_plot = self.set_button(master=self.frame_move,
+                             text="Force Plot", rely=0.45, x=700,
+                             command=self.open_force_plot_window)
 
         # 4. Gripper Control
         self.frame_gripper = LabelFrame(self.root, text="Gripper Control (Robotiq EPick)", labelanchor="nw",
@@ -523,6 +533,173 @@ class RobotUI(object):
             self.client_dash.DO(int(self.entry_index.get()), 1)
         else:
             self.client_dash.DO(int(self.entry_index.get()), 0)
+
+    # ================= 力曲线绘制相关 =================
+
+    def open_force_plot_window(self):
+        """打开一个新的 Tk 窗口，使用 Matplotlib 实时绘制 Fx,Fy,Fz,Tx,Ty,Tz 曲线。"""
+        if not self.global_state.get("connect"):
+            messagebox.showwarning("Force Plot", "请先连接机器人")
+            return
+
+        # 开启力传感器并归零
+        try:
+            self.client_dash.EnableFTSensor(1)
+            time.sleep(0.1)
+            self.client_dash.SixForceHome()
+        except Exception as e:
+            messagebox.showerror("Force Plot", f"开启或归零力传感器失败: {e}")
+            return
+
+        if self.force_plot_window is not None:
+            try:
+                self.force_plot_window.deiconify()
+                return
+            except Exception:
+                self.force_plot_window = None
+
+        self.force_plot_window = Toplevel(self.root)
+        self.force_plot_window.title("Force/Torque Curve")
+        self.force_plot_window.geometry("900x600")
+
+        fig, ax = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+        self.force_fig = fig
+        self.force_axes = ax
+
+        self.force_time_data = []
+        self.force_data = {k: [] for k in ["Fx", "Fy", "Fz", "Tx", "Ty", "Tz"]}
+
+        # 创建 6 条曲线
+        self.force_lines = {}
+        colors = {
+            "Fx": "r", "Fy": "g", "Fz": "b",
+            "Tx": "c", "Ty": "m", "Tz": "y",
+        }
+        for key in ["Fx", "Fy", "Fz"]:
+            line, = ax[0].plot([], [], label=key, color=colors[key])
+            self.force_lines[key] = line
+        ax[0].set_ylabel("Force (N)")
+        ax[0].legend(loc="upper right")
+
+        for key in ["Tx", "Ty", "Tz"]:
+            line, = ax[1].plot([], [], label=key, color=colors[key])
+            self.force_lines[key] = line
+        ax[1].set_ylabel("Torque (N·m)")
+        ax[1].set_xlabel("Time (s)")
+        ax[1].legend(loc="upper right")
+
+        canvas = FigureCanvasTkAgg(fig, master=self.force_plot_window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=BOTH, expand=YES)
+        self.force_canvas = canvas
+
+        # 关闭窗口时停止线程
+        def _on_close():
+            self.force_plot_running = False
+            self.force_plot_window.destroy()
+            self.force_plot_window = None
+
+        self.force_plot_window.protocol("WM_DELETE_WINDOW", _on_close)
+
+        # 启动采样线程
+        if not self.force_plot_running:
+            self.force_plot_running = True
+            self.force_plot_thread = Thread(target=self.force_plot_loop, daemon=True)
+            self.force_plot_thread.start()
+
+        # 定时刷新图像（使用 Tk 的 after）
+        self.schedule_force_plot_redraw()
+
+    def schedule_force_plot_redraw(self):
+        if not self.force_plot_running or self.force_plot_window is None:
+            return
+        try:
+            self.update_force_plot()
+            self.force_plot_window.after(200, self.schedule_force_plot_redraw)
+        except Exception:
+            pass
+
+    def force_plot_loop(self):
+        start_time = time.time()
+        while self.force_plot_running and self.global_state.get("connect"):
+            try:
+                resp = self.client_dash.GetForce()
+                fx, fy, fz, tx, ty, tz = self.parse_force_response(resp)
+                t = time.time() - start_time
+                self.force_time_data.append(t)
+                self.force_data["Fx"].append(fx)
+                self.force_data["Fy"].append(fy)
+                self.force_data["Fz"].append(fz)
+                self.force_data["Tx"].append(tx)
+                self.force_data["Ty"].append(ty)
+                self.force_data["Tz"].append(tz)
+
+                # 只保留最近 30 秒数据，防止无限增长
+                window = 30.0
+                while self.force_time_data and (t - self.force_time_data[0] > window):
+                    self.force_time_data.pop(0)
+                    for k in self.force_data:
+                        if self.force_data[k]:
+                            self.force_data[k].pop(0)
+            except Exception as e:
+                print("Force plot loop error:", e)
+            time.sleep(0.05)
+
+        self.force_plot_running = False
+
+    def parse_force_response(self, response):
+        """解析 GetForce() 返回的 6 个数值，按 Fx,Fy,Fz,Tx,Ty,Tz 顺序输出。"""
+        if response is None:
+            return 0, 0, 0, 0, 0, 0
+
+        # 字典形式
+        if isinstance(response, dict):
+            keys = ["fx", "fy", "fz", "frx", "fry", "frz"]
+            vals = []
+            for k in keys:
+                v = response.get(k) or response.get(k.upper()) or response.get(k.capitalize())
+                vals.append(float(v) if v is not None else 0.0)
+            return vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]
+
+        # list / tuple
+        if isinstance(response, (list, tuple)):
+            nums = []
+            for v in response:
+                try:
+                    nums.append(float(v))
+                except Exception:
+                    nums.append(0.0)
+            while len(nums) < 6:
+                nums.append(0.0)
+            return nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]
+
+        # 字符串
+        if isinstance(response, bytes):
+            response = response.decode(errors="ignore")
+        if isinstance(response, str):
+            nums = re.findall(r"-?\d+\.?\d*", response)
+            nums = [float(n) for n in nums[:6]]
+            while len(nums) < 6:
+                nums.append(0.0)
+            return nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]
+
+        return 0, 0, 0, 0, 0, 0
+
+    def update_force_plot(self):
+        if not hasattr(self, "force_fig") or not self.force_time_data:
+            return
+        t = self.force_time_data
+        for key in ["Fx", "Fy", "Fz"]:
+            self.force_lines[key].set_data(t, self.force_data[key])
+        for key in ["Tx", "Ty", "Tz"]:
+            self.force_lines[key].set_data(t, self.force_data[key])
+
+        for i, keys in enumerate((["Fx", "Fy", "Fz"], ["Tx", "Ty", "Tz"])):
+            ax = self.force_axes[i]
+            ax.relim()
+            ax.autoscale_view()
+
+        self.force_canvas.draw_idle()
 
     def set_feed(self, text_list, x1, x2, x3, x4):
         self.set_button_bind(self.frame_feed, text_list[0][0], rely=0.2, x=x1, command=lambda: self.move_jog(text_list[0][0]))
