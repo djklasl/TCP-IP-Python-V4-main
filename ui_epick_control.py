@@ -648,20 +648,46 @@ class RobotUI(object):
         self.force_plot_running = False
 
     def parse_force_response(self, response):
-        """解析 GetForce() 返回的 6 个数值，按 Fx,Fy,Fz,Tx,Ty,Tz 顺序输出。"""
-        if response is None:
+        """
+        [修改说明] 
+        GetForce 返回格式为: ErrorID,{Fx,Fy,Fz,Mx,My,Mz},GetForce();
+        原代码直接findall会导致ErrorID被误读为Fx。
+        修改为先提取花括号 {} 内部的内容，再解析数值。
+        """
+        if not response:
             return 0, 0, 0, 0, 0, 0
 
-        # 字典形式
+        # 1. 处理字符串格式的返回值
+        if isinstance(response, (str, bytes)):
+            if isinstance(response, bytes):
+                response = response.decode(errors="ignore")
+            
+            # 使用正则提取花括号 {} 内部的内容
+            match = re.search(r"\{(.*?)\}", response)
+            if match:
+                try:
+                    content = match.group(1)
+                    # 按逗号分割并转换为浮点数
+                    vals = [float(x) for x in content.split(',')]
+                    if len(vals) >= 6:
+                        # 成功提取 Fx, Fy, Fz, Mx, My, Mz
+                        return vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]
+                except ValueError:
+                    pass
+            # 如果正则匹配失败，可能是其他格式或报错信息，返回0
+            return 0, 0, 0, 0, 0, 0
+
+        # 2. 兼容字典格式 (如果底层库直接返回解析好的字典)
         if isinstance(response, dict):
-            keys = ["fx", "fy", "fz", "frx", "fry", "frz"]
+            keys = ["fx", "fy", "fz", "frx", "fry", "frz"] # 注意大小写可能不同，建议多做兼容
             vals = []
             for k in keys:
+                # 尝试获取不同大小写可能的键
                 v = response.get(k) or response.get(k.upper()) or response.get(k.capitalize())
                 vals.append(float(v) if v is not None else 0.0)
             return vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]
 
-        # list / tuple
+        # 3. 兼容列表/元组格式 (如果底层库返回的是列表)
         if isinstance(response, (list, tuple)):
             nums = []
             for v in response:
@@ -669,16 +695,6 @@ class RobotUI(object):
                     nums.append(float(v))
                 except Exception:
                     nums.append(0.0)
-            while len(nums) < 6:
-                nums.append(0.0)
-            return nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]
-
-        # 字符串
-        if isinstance(response, bytes):
-            response = response.decode(errors="ignore")
-        if isinstance(response, str):
-            nums = re.findall(r"-?\d+\.?\d*", response)
-            nums = [float(n) for n in nums[:6]]
             while len(nums) < 6:
                 nums.append(0.0)
             return nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]
