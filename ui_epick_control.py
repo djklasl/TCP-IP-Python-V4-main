@@ -521,6 +521,11 @@ class RobotUI(object):
                               float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()),0)
 
     def movl(self):
+        # 在这里固定直线运动速度比例（例如 20%），避免太快
+        try:
+            self.client_dash.VelL(20)
+        except Exception:
+            pass
         self.client_dash.MovL(float(self.entry_dict["X:"].get()), float(self.entry_dict["Y:"].get()), float(self.entry_dict["Z:"].get()),
                               float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()),0)
 
