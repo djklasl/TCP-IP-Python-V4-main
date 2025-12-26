@@ -6,6 +6,9 @@
 
 from threading import Thread
 import time
+import os
+import csv
+from datetime import datetime
 from tkinter import *
 from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
@@ -170,6 +173,19 @@ class RobotUI(object):
         self.force_plot_running = False
         self.force_plot_thread = None
 
+        # 录制（Record）相关
+        self.record_running = False
+        self.record_stop_event = threading.Event()
+        self.record_thread = None
+        self.record_file_handle = None
+        self.record_csv_writer = None
+        self.record_path = None
+
+        # 反馈缓存（用于在同一“时间点”写入一组数据）
+        self.latest_joints = [0.0] * 6
+        self.latest_tcp = [0.0] * 6
+        self.gripper_state = 0  # 1=grip pressed, 0=otherwise
+
         # 1. Robot Connect
         self.frame_robot = LabelFrame(self.root, text="Robot Connect",
                                       labelanchor="nw", bg="#FFFFFF", width=920, height=120, border=2)
@@ -253,18 +269,23 @@ class RobotUI(object):
         self.set_button(master=self.frame_move, text="MovJ", rely=0.05, x=610, command=self.movj)
         self.set_button(master=self.frame_move, text="MovL", rely=0.05, x=700, command=self.movl)
         
-        self.set_move(text="J1:", label_value=10, default_value="0", entry_value=40, rely=0.5, master=self.frame_move)
-        self.set_move(text="J2:", label_value=110, default_value="-20", entry_value=140, rely=0.5, master=self.frame_move)
-        self.set_move(text="J3:", label_value=210, default_value="-80", entry_value=240, rely=0.5, master=self.frame_move)
-        self.set_move(text="J4:", label_value=310, default_value="30", entry_value=340, rely=0.5, master=self.frame_move)
-        self.set_move(text="J5:", label_value=410, default_value="90", entry_value=440, rely=0.5, master=self.frame_move)
-        self.set_move(text="J6:", label_value=510, default_value="120", entry_value=540, rely=0.5, master=self.frame_move)
+        self.set_move(text="J1:", label_value=10, default_value="-73.7918", entry_value=40, rely=0.5, master=self.frame_move)
+        self.set_move(text="J2:", label_value=110, default_value="30.6583", entry_value=140, rely=0.5, master=self.frame_move)
+        self.set_move(text="J3:", label_value=210, default_value="-113.9981", entry_value=240, rely=0.5, master=self.frame_move)
+        self.set_move(text="J4:", label_value=310, default_value="-6.2542", entry_value=340, rely=0.5, master=self.frame_move)
+        self.set_move(text="J5:", label_value=410, default_value="89.5027", entry_value=440, rely=0.5, master=self.frame_move)
+        self.set_move(text="J6:", label_value=510, default_value="48.4056", entry_value=540, rely=0.5, master=self.frame_move)
         self.set_button(master=self.frame_move, text="MovJ", rely=0.45, x=610, command=self.joint_movj)
 
         # 力曲线绘制按钮（弹出新窗口）
         self.button_force_plot = self.set_button(master=self.frame_move,
                              text="Force Plot", rely=0.45, x=700,
                              command=self.open_force_plot_window)
+
+        # 录制按钮（连续记录：关节 + TCP + 力/力矩）
+        self.button_record = self.set_button(master=self.frame_move,
+                     text="Record", rely=0.45, x=800,
+                     command=self.toggle_record)
 
         # 4. Gripper Control
         self.frame_gripper = LabelFrame(self.root, text="Gripper Control (Robotiq EPick)", labelanchor="nw",
@@ -422,6 +443,7 @@ class RobotUI(object):
             mn = int(self.epick_min.get())
             tm = int(self.epick_timeout.get())
             self.epick.grip(mx, mn, tm)
+            self.gripper_state = 1
             print(f"EPick Grip (Max={mx}, Min={mn})")
         except Exception as e:
             messagebox.showerror("EPick Error", str(e))
@@ -430,6 +452,7 @@ class RobotUI(object):
         if not self.epick: return
         try:
             self.epick.release()
+            self.gripper_state = 0
             print("EPick Release")
         except Exception as e:
             messagebox.showerror("EPick Error", str(e))
@@ -437,9 +460,15 @@ class RobotUI(object):
     def connect_port(self):
         if self.global_state["connect"]:
             print("断开成功")
+            # 断开时自动停止录制，防止线程/文件句柄泄漏
+            try:
+                self.stop_record()
+            except Exception:
+                pass
             if self.epick:
                 self.epick.close_modbus_channel()
                 self.epick = None
+            self.gripper_state = 0
             self.client_dash.close()
             self.client_feed.close()
             self.client_dash = None
@@ -538,6 +567,185 @@ class RobotUI(object):
             self.client_dash.DO(int(self.entry_index.get()), 1)
         else:
             self.client_dash.DO(int(self.entry_index.get()), 0)
+
+    # ================= 录制（Record）相关 =================
+
+    def _next_demo_csv_path(self, out_dir: str, *, prefix: str = "demo_", ext: str = ".csv") -> str:
+        max_idx = 0
+        try:
+            for name in os.listdir(out_dir):
+                if not name.lower().endswith(ext.lower()):
+                    continue
+                # demo_1.csv, demo_2.csv ...
+                # 注意：这里需要用 (\d+) 匹配数字；写成 (\\d+) 会变成匹配字面量“\d”，导致永远识别不到旧文件
+                m = re.match(rf"^{re.escape(prefix)}(\d+){re.escape(ext)}$", name, flags=re.IGNORECASE)
+                if not m:
+                    continue
+                try:
+                    max_idx = max(max_idx, int(m.group(1)))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return os.path.join(out_dir, f"{prefix}{max_idx + 1}{ext}")
+
+    def toggle_record(self):
+        if self.record_running:
+            self.stop_record()
+        else:
+            self.start_record()
+
+    def start_record(self, sample_interval: float = 0.05):
+        if not self.global_state.get("connect"):
+            messagebox.showwarning("Record", "请先连接机器人")
+            return
+
+        if self.record_running:
+            return
+
+        # 录制开始时启用并归零力控传感器，确保随后 GetForce() 的示数可用且以当前为零点
+        try:
+            self.client_dash.EnableFTSensor(1)
+            time.sleep(0.1)
+            self.client_dash.SixForceHome()
+            try:
+                self.text_log.insert(END, "[Record] EnableFTSensor + SixForceHome done\n")
+                self.text_log.see(END)
+            except Exception:
+                pass
+        except Exception as e:
+            # 不阻断录制，只提示一下，避免因为传感器异常导致无法记录关节/位姿
+            try:
+                self.text_log.insert(END, f"[Record] EnableFTSensor/SixForceHome failed: {e}\n")
+                self.text_log.see(END)
+            except Exception:
+                pass
+
+        # 创建输出目录
+        out_dir = "C:/Users/dell/Desktop/vladata"
+        os.makedirs(out_dir, exist_ok=True)
+
+        # 录制文件名：demo_1.csv, demo_2.csv, ...（自动递增，避免覆盖）
+        self.record_path = self._next_demo_csv_path(out_dir)
+
+        # Excel 兼容：utf-8-sig
+        self.record_file_handle = open(self.record_path, "w", newline="", encoding="utf-8-sig")
+        self.record_csv_writer = csv.writer(self.record_file_handle)
+        self.record_csv_writer.writerow([
+            "timestamp",
+            "J1", "J2", "J3", "J4", "J5", "J6",
+            "X", "Y", "Z", "Rx", "Ry", "Rz",
+            "Fx", "Fy", "Fz", "Tx", "Ty", "Tz",
+            "GripperState",
+        ])
+        self.record_file_handle.flush()
+
+        self.record_stop_event.clear()
+        self.record_running = True
+        try:
+            self.button_record["text"] = "Stop Record"
+            self.button_record["bg"] = "#ffe1e1"
+        except Exception:
+            pass
+
+        self.record_thread = Thread(target=self.record_loop, args=(sample_interval,), daemon=True)
+        self.record_thread.start()
+
+        try:
+            self.text_log.insert(END, f"[Record] Start: {self.record_path}\n")
+            self.text_log.see(END)
+        except Exception:
+            pass
+
+    def stop_record(self):
+        if not self.record_running:
+            return
+
+        self.record_stop_event.set()
+        self.record_running = False
+
+        # 尝试等待线程退出（不阻塞太久）
+        try:
+            if self.record_thread and self.record_thread.is_alive():
+                self.record_thread.join(timeout=1.0)
+        except Exception:
+            pass
+
+        saved_path = self.record_path
+
+        # 关闭文件
+        try:
+            if self.record_file_handle:
+                self.record_file_handle.flush()
+                self.record_file_handle.close()
+        except Exception:
+            pass
+        finally:
+            self.record_file_handle = None
+            self.record_csv_writer = None
+
+        try:
+            self.button_record["text"] = "Record"
+            self.button_record["bg"] = "SystemButtonFace"
+        except Exception:
+            pass
+
+        try:
+            if self.record_path:
+                self.text_log.insert(END, f"[Record] Stop: {self.record_path}\n")
+                self.text_log.see(END)
+        except Exception:
+            pass
+
+        # 弹窗提示：已保存到...
+        try:
+            if saved_path:
+                messagebox.showinfo("Record", f"已保存到:\n{saved_path}")
+        except Exception:
+            pass
+
+        # 关闭后清理路径，避免误用旧路径（不影响下一次自动生成）
+        self.record_path = None
+
+    def record_loop(self, sample_interval: float):
+        # 用 next_tick 控制节拍，尽量接近固定 0.05s
+        next_tick = time.time()
+        while (not self.record_stop_event.is_set()) and self.global_state.get("connect"):
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+            joints = list(self.latest_joints) if self.latest_joints else [0.0] * 6
+            tcp = list(self.latest_tcp) if self.latest_tcp else [0.0] * 6
+
+            fx = fy = fz = tx = ty = tz = 0.0
+            try:
+                resp = self.client_dash.GetForce()
+                fx, fy, fz, tx, ty, tz = self.parse_force_response(resp)
+            except Exception:
+                pass
+
+            try:
+                if self.record_csv_writer:
+                    self.record_csv_writer.writerow([
+                        now,
+                        *joints,
+                        *tcp,
+                        fx, fy, fz, tx, ty, tz,
+                        self.gripper_state,
+                    ])
+                    if self.record_file_handle:
+                        self.record_file_handle.flush()
+            except Exception:
+                # 写文件失败时停止录制，避免无限报错
+                self.record_stop_event.set()
+                break
+
+            next_tick += float(sample_interval)
+            sleep_s = next_tick - time.time()
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+            else:
+                # 如果落后太多，重置节拍避免越积越多
+                next_tick = time.time()
 
     # ================= 力曲线绘制相关 =================
 
@@ -772,6 +980,16 @@ class RobotUI(object):
                     self.label_di_output["text"] = bin(a["DigitalOutputs"][0])[2:].rjust(64, '0')
                     self.set_feed_joint(LABEL_JOINT, a["QActual"])
                     self.set_feed_joint(LABEL_COORD, a["ToolVectorActual"])
+
+                    # 缓存最新关节与 TCP 位姿（供 Record 使用）
+                    try:
+                        q = np.around(a["QActual"], decimals=4)
+                        tv = np.around(a["ToolVectorActual"], decimals=4)
+                        self.latest_joints = [float(q[0][i]) for i in range(6)]
+                        self.latest_tcp = [float(tv[0][i]) for i in range(6)]
+                    except Exception:
+                        pass
+
                     if a["RobotMode"] == 9: self.display_error_info()
             except Exception as e:
                 time.sleep(0.2)
