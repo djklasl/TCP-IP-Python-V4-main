@@ -1096,7 +1096,7 @@ class RobotUI(object):
         self.client_dash.MovL(311.922, -540.1135, 232.9427,
                               179.7206, -2.8744, 57.4065,0)
         
-        time.sleep(3)
+        time.sleep(2)
         self.epick_release ()
 
         time.sleep(1)
@@ -1125,11 +1125,12 @@ class RobotUI(object):
         time.sleep(6)
         self.epick_grip ()
 
+        time.sleep(1)
         self.client_dash.MovL(-41.4081, -580.163, 424.64,
                               178.3245, -2.6598, 53.6439,0)
-        self.client_dash.MovL(-41.4081, -580.163, 226.64,
+        self.client_dash.MovL(-41.4081, -580.163, 240.64,
                               178.3245, -2.6598, 53.6439,0)
-        time.sleep(3)
+        time.sleep(2)
         self.epick_release ()
 
         time.sleep(1)
@@ -1156,11 +1157,12 @@ class RobotUI(object):
         time.sleep(6)
         self.epick_grip ()
 
+        time.sleep(1)
         self.client_dash.MovL(-466.3269, -581.647, 436.1745,
                               -178.9742, -0.2927, 53.9894,0)
         self.client_dash.MovL(-466.3269, -581.647, 238.1745,
                               -178.9742, -0.2927, 53.9894,0)
-        time.sleep(3)
+        time.sleep(2)
         self.epick_release ()
 
         time.sleep(1)
