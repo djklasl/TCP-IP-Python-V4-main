@@ -1099,7 +1099,7 @@ class RobotUI(object):
         time.sleep(3)
         self.epick_release ()
 
-        time.sleep(2)
+        time.sleep(1)
         if started_record_here:
             self.stop_record()
 
@@ -1132,7 +1132,7 @@ class RobotUI(object):
         time.sleep(3)
         self.epick_release ()
 
-        time.sleep(2)
+        time.sleep(1)
         if started_record_here:
             self.stop_record()
 
@@ -1163,7 +1163,7 @@ class RobotUI(object):
         time.sleep(3)
         self.epick_release ()
 
-        time.sleep(2)
+        time.sleep(1)
         if started_record_here:
             self.stop_record()
 
