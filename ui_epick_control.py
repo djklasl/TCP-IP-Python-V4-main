@@ -165,6 +165,7 @@ class RobotUI(object):
         self.root.title("Python demo V4 (With Gripper)")
         self.root.geometry("950x960") 
 
+
         self.global_state = {}
         self.button_list = []
         self.entry_dict = {}
@@ -266,16 +267,24 @@ class RobotUI(object):
         self.set_move(text="Rx:", label_value=310, default_value="170", entry_value=340, rely=0.1, master=self.frame_move)
         self.set_move(text="Ry:", label_value=410, default_value="12", entry_value=440, rely=0.1, master=self.frame_move)
         self.set_move(text="Rz:", label_value=510, default_value="140", entry_value=540, rely=0.1, master=self.frame_move)
-        self.set_button(master=self.frame_move, text="MovJ", rely=0.05, x=610, command=self.movj)
-        self.set_button(master=self.frame_move, text="MovL", rely=0.05, x=700, command=self.movl)
+        # self.set_button(master=self.frame_move, text="MovJ", rely=0.05, x=610, command=self.movj)
+        self.set_button(master=self.frame_move, text="MovL", rely=0.05, x=610, command=self.movl)
         
-        self.set_move(text="J1:", label_value=10, default_value="-73.7918", entry_value=40, rely=0.5, master=self.frame_move)
-        self.set_move(text="J2:", label_value=110, default_value="30.6583", entry_value=140, rely=0.5, master=self.frame_move)
-        self.set_move(text="J3:", label_value=210, default_value="-113.9981", entry_value=240, rely=0.5, master=self.frame_move)
-        self.set_move(text="J4:", label_value=310, default_value="-6.2542", entry_value=340, rely=0.5, master=self.frame_move)
-        self.set_move(text="J5:", label_value=410, default_value="89.5027", entry_value=440, rely=0.5, master=self.frame_move)
-        self.set_move(text="J6:", label_value=510, default_value="48.4056", entry_value=540, rely=0.5, master=self.frame_move)
+        self.set_move(text="J1:", label_value=10, default_value="-86.1383", entry_value=40, rely=0.5, master=self.frame_move)
+        self.set_move(text="J2:", label_value=110, default_value="24.5115", entry_value=140, rely=0.5, master=self.frame_move)
+        self.set_move(text="J3:", label_value=210, default_value="-96.7030", entry_value=240, rely=0.5, master=self.frame_move)
+        self.set_move(text="J4:", label_value=310, default_value="-17.2796", entry_value=340, rely=0.5, master=self.frame_move)
+        self.set_move(text="J5:", label_value=410, default_value="89.8433", entry_value=440, rely=0.5, master=self.frame_move)
+        self.set_move(text="J6:", label_value=510, default_value="120.0313", entry_value=540, rely=0.5, master=self.frame_move)
         self.set_button(master=self.frame_move, text="MovJ", rely=0.45, x=610, command=self.joint_movj)
+
+        #################################################################
+
+        self.set_button(master=self.frame_move, text="mov2book", rely=0.05, x=670, command=self.mov2book)
+        self.set_button(master=self.frame_move, text="mov2steal", rely=0.05, x=740, command=self.mov2steal)
+        self.set_button(master=self.frame_move, text="mov2other", rely=0.05, x=810, command=self.mov2other)
+
+        #################################################################
 
         # 力曲线绘制按钮（弹出新窗口）
         self.button_force_plot = self.set_button(master=self.frame_move,
@@ -511,10 +520,12 @@ class RobotUI(object):
     def enable(self):
         if self.global_state["enable"]:
             self.client_dash.DisableRobot()
+            self.client_dash.VelL(50)
             self.button_enable["text"] = "Enable"
         else:
             self.client_dash.EnableRobot()
             self.button_enable["text"] = "Disable"
+            self.client_dash.VelL(50)
         self.global_state["enable"] = not self.global_state["enable"]
 
     def start_drag(self):
@@ -549,12 +560,13 @@ class RobotUI(object):
         self.client_dash.MovJ(float(self.entry_dict["X:"].get()), float(self.entry_dict["Y:"].get()), float(self.entry_dict["Z:"].get()),
                               float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()),0)
 
+
     def movl(self):
         # 在这里固定直线运动速度比例（例如 10%），避免太快
-        try:
-            self.client_dash.VelL(10)
-        except Exception:
-            pass
+        # try:
+        #     self.client_dash.VelL(10)
+        # except Exception:
+        #     pass
         self.client_dash.MovL(float(self.entry_dict["X:"].get()), float(self.entry_dict["Y:"].get()), float(self.entry_dict["Z:"].get()),
                               float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()),0)
 
@@ -622,7 +634,7 @@ class RobotUI(object):
                 pass
 
         # 创建输出目录
-        out_dir = "C:/Users/dell/Desktop/vladata"
+        out_dir = "D:/vladata"
         os.makedirs(out_dir, exist_ok=True)
 
         # 录制文件名：demo_1.csv, demo_2.csv, ...（自动递增，避免覆盖）
@@ -1035,6 +1047,70 @@ class RobotUI(object):
         self.label_feed_dict[label[1][3]]["text"] = array_value[0][3]
         self.label_feed_dict[label[1][4]]["text"] = array_value[0][4]
         self.label_feed_dict[label[1][5]]["text"] = array_value[0][5]
+
+    def mov2book(self):
+        # try:
+        #     self.client_dash.VelL(10)
+        # except Exception:
+        #     pass
+        mx = int(self.epick_max.get())
+        mn = int(self.epick_min.get())
+        tm = int(self.epick_timeout.get())
+        self.epick.grip(mx, mn, tm)
+        self.gripper_state = 1
+        print(f"EPick Grip (Max={mx}, Min={mn})")
+        self.client_dash.MovL(311.922, -540.1135, 222.9427,
+                              179.7206, -2.8744, 57.4065,0)
+        self.client_dash.MovL(311.922, -540.1135, 428.9427,
+                              179.7206, -2.8744, 57.4065,0)
+        self.client_dash.MovL(311.922, -540.1135, 232.9427,
+                              179.7206, -2.8744, 57.4065,0)
+        # self.client_dash.MovJ(-86.1383, 24.5115, -96.7030,
+        #                            -17.2796, 89.8433, 120.0313,1)
+        
+        
+
+    def mov2steal(self):
+        # try:
+        #     self.client_dash.VelL(10)
+        # except Exception:
+        #     pass
+        mx = int(self.epick_max.get())
+        mn = int(self.epick_min.get())
+        tm = int(self.epick_timeout.get())
+        self.epick.grip(mx, mn, tm)
+        self.gripper_state = 1
+        print(f"EPick Grip (Max={mx}, Min={mn})")
+        self.client_dash.MovL(-41.4081, -580.163, 216.64,
+                              178.3245, -2.6598, 53.6439,0)
+        self.client_dash.MovL(-41.4081, -580.163, 424.64,
+                              178.3245, -2.6598, 53.6439,0)
+        self.client_dash.MovL(-41.4081, -580.163, 226.64,
+                              178.3245, -2.6598, 53.6439,0)
+        # self.client_dash.MovJ(-86.1383, 24.5115, -96.7030,
+        #                            -17.2796, 89.8433, 120.0313,1)
+
+        
+    def mov2other(self):
+        # try:
+        #     self.client_dash.VelL(10)
+        # except Exception:
+        #     pass
+        mx = int(self.epick_max.get())
+        mn = int(self.epick_min.get())
+        tm = int(self.epick_timeout.get())
+        self.epick.grip(mx, mn, tm)
+        self.gripper_state = 1
+        print(f"EPick Grip (Max={mx}, Min={mn})")
+        self.client_dash.MovL(-466.3269, -581.647, 232.1745,
+                              -178.9742, -0.2927, 53.9894,0)
+        self.client_dash.MovL(-466.3269, -581.647, 436.1745,
+                              -178.9742, -0.2927, 53.9894,0)
+        self.client_dash.MovL(-466.3269, -581.647, 238.1745,
+                              -178.9742, -0.2927, 53.9894,0)
+        # self.client_dash.MovJ(-86.1383, 24.5115, -96.7030,
+        #                            -17.2796, 89.8433, 120.0313,1)
+        
 
 if __name__ == "__main__":
     ui = RobotUI()
