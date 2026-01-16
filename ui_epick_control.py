@@ -236,7 +236,7 @@ class RobotUI(object):
                         text="ClearError", rely=0.1, x=200, command=self.clear_error)
         self.label_speed = Label(self.frame_dashboard, text="Speed Ratio:")
         self.label_speed.place(rely=0.1, x=430)
-        s_value = StringVar(self.root, value="50")
+        s_value = StringVar(self.root, value="20")
         self.entry_speed = Entry(self.frame_dashboard, width=6, textvariable=s_value)
         self.entry_speed.place(rely=0.1, x=520)
         self.label_cent = Label(self.frame_dashboard, text="%")
@@ -709,13 +709,6 @@ class RobotUI(object):
         except Exception:
             pass
 
-        # 弹窗提示：已保存到...
-        try:
-            if saved_path:
-                messagebox.showinfo("Record", f"已保存到:\n{saved_path}")
-        except Exception:
-            pass
-
         # 关闭后清理路径，避免误用旧路径（不影响下一次自动生成）
         self.record_path = None
 
@@ -971,6 +964,20 @@ class RobotUI(object):
         self.set_button_bind(self.frame_feed, text_list[2][4], rely=0.6, x=x4, command=lambda: self.move_jog(text_list[2][4]))
         self.set_button_bind(self.frame_feed, text_list[2][5], rely=0.7, x=x4, command=lambda: self.move_jog(text_list[2][5]))
 
+    def _apply_feedback_ui(self, speed_scaling, robot_mode, di_in_bits, di_out_bits, q_actual, tool_vector_actual):
+        """在 Tk 主线程更新反馈 UI（线程安全）。"""
+        try:
+            self.label_feed_speed["text"] = speed_scaling
+            self.label_robot_mode["text"] = LABEL_ROBOT_MODE.get(int(robot_mode), "")
+            self.label_di_input["text"] = di_in_bits
+            self.label_di_output["text"] = di_out_bits
+            self.set_feed_joint(LABEL_JOINT, q_actual)
+            self.set_feed_joint(LABEL_COORD, tool_vector_actual)
+            if int(robot_mode) == 9:
+                self.display_error_info()
+        except Exception:
+            pass
+
     def feed_back(self):
         while True:
             if not self.global_state["connect"]: break
@@ -986,25 +993,44 @@ class RobotUI(object):
 
                 a = np.frombuffer(data, dtype=MyType)
                 if hex((a['TestValue'][0])) == '0x123456789abcdef':
-                    self.label_feed_speed["text"] = a["SpeedScaling"][0]
-                    self.label_robot_mode["text"] = LABEL_ROBOT_MODE[a["RobotMode"][0]]
-                    self.label_di_input["text"] = bin(a["DigitalInputs"][0])[2:].rjust(64, '0')
-                    self.label_di_output["text"] = bin(a["DigitalOutputs"][0])[2:].rjust(64, '0')
-                    self.set_feed_joint(LABEL_JOINT, a["QActual"])
-                    self.set_feed_joint(LABEL_COORD, a["ToolVectorActual"])
+                    speed_scaling = a["SpeedScaling"][0]
+                    robot_mode = int(a["RobotMode"][0])
+                    di_in_bits = bin(a["DigitalInputs"][0])[2:].rjust(64, '0')
+                    di_out_bits = bin(a["DigitalOutputs"][0])[2:].rjust(64, '0')
+
+                    # 拷贝一份，避免后续 buffer 复用导致 UI/缓存数据错乱
+                    q_actual = a["QActual"].copy()
+                    tool_vector_actual = a["ToolVectorActual"].copy()
 
                     # 缓存最新关节与 TCP 位姿（供 Record 使用）
                     try:
-                        q = np.around(a["QActual"], decimals=4)
-                        tv = np.around(a["ToolVectorActual"], decimals=4)
+                        q = np.around(q_actual, decimals=4)
+                        tv = np.around(tool_vector_actual, decimals=4)
                         self.latest_joints = [float(q[0][i]) for i in range(6)]
                         self.latest_tcp = [float(tv[0][i]) for i in range(6)]
                     except Exception:
                         pass
 
-                    if a["RobotMode"] == 9: self.display_error_info()
+                    # Tk 控件必须在主线程更新，否则在 mov2* 的阻塞/延时期间会不刷新甚至异常
+                    try:
+                        self.root.after(
+                            0,
+                            self._apply_feedback_ui,
+                            speed_scaling,
+                            robot_mode,
+                            di_in_bits,
+                            di_out_bits,
+                            q_actual,
+                            tool_vector_actual,
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 time.sleep(0.2)
+
+    def _run_sequence_async(self, target):
+        """在后台线程执行耗时动作，避免卡住 Tk 主线程。"""
+        Thread(target=target, daemon=True).start()
 
     def display_error_info(self):
         try:
@@ -1049,67 +1075,100 @@ class RobotUI(object):
         self.label_feed_dict[label[1][5]]["text"] = array_value[0][5]
 
     def mov2book(self):
-        # try:
-        #     self.client_dash.VelL(10)
-        # except Exception:
-        #     pass
-        mx = int(self.epick_max.get())
-        mn = int(self.epick_min.get())
-        tm = int(self.epick_timeout.get())
-        self.epick.grip(mx, mn, tm)
-        self.gripper_state = 1
-        print(f"EPick Grip (Max={mx}, Min={mn})")
+        self._run_sequence_async(self._mov2book_seq)
+
+    def _mov2book_seq(self):
+        started_record_here = False
+        if not self.record_running:
+            self.start_record()
+            started_record_here = True
+
+        time.sleep(1)
+
         self.client_dash.MovL(311.922, -540.1135, 222.9427,
                               179.7206, -2.8744, 57.4065,0)
+
+        time.sleep(6)
+        self.epick_grip ()
+
         self.client_dash.MovL(311.922, -540.1135, 428.9427,
                               179.7206, -2.8744, 57.4065,0)
         self.client_dash.MovL(311.922, -540.1135, 232.9427,
                               179.7206, -2.8744, 57.4065,0)
-        # self.client_dash.MovJ(-86.1383, 24.5115, -96.7030,
-        #                            -17.2796, 89.8433, 120.0313,1)
+        
+        time.sleep(3)
+        self.epick_release ()
+
+        time.sleep(2)
+        if started_record_here:
+            self.stop_record()
+
+        time.sleep(1)
+        self.joint_movj()
+
         
         
 
     def mov2steal(self):
-        # try:
-        #     self.client_dash.VelL(10)
-        # except Exception:
-        #     pass
-        mx = int(self.epick_max.get())
-        mn = int(self.epick_min.get())
-        tm = int(self.epick_timeout.get())
-        self.epick.grip(mx, mn, tm)
-        self.gripper_state = 1
-        print(f"EPick Grip (Max={mx}, Min={mn})")
+        self._run_sequence_async(self._mov2steal_seq)
+
+    def _mov2steal_seq(self):
+        started_record_here = False
+        if not self.record_running:
+            self.start_record()
+            started_record_here = True
+
+        time.sleep(1)
+
         self.client_dash.MovL(-41.4081, -580.163, 216.64,
                               178.3245, -2.6598, 53.6439,0)
+        time.sleep(6)
+        self.epick_grip ()
+
         self.client_dash.MovL(-41.4081, -580.163, 424.64,
                               178.3245, -2.6598, 53.6439,0)
         self.client_dash.MovL(-41.4081, -580.163, 226.64,
                               178.3245, -2.6598, 53.6439,0)
-        # self.client_dash.MovJ(-86.1383, 24.5115, -96.7030,
-        #                            -17.2796, 89.8433, 120.0313,1)
+        time.sleep(3)
+        self.epick_release ()
+
+        time.sleep(2)
+        if started_record_here:
+            self.stop_record()
+
+        time.sleep(1)
+        self.joint_movj ()
 
         
     def mov2other(self):
-        # try:
-        #     self.client_dash.VelL(10)
-        # except Exception:
-        #     pass
-        mx = int(self.epick_max.get())
-        mn = int(self.epick_min.get())
-        tm = int(self.epick_timeout.get())
-        self.epick.grip(mx, mn, tm)
-        self.gripper_state = 1
-        print(f"EPick Grip (Max={mx}, Min={mn})")
-        self.client_dash.MovL(-466.3269, -581.647, 232.1745,
+        self._run_sequence_async(self._mov2other_seq)
+
+    def _mov2other_seq(self):
+        started_record_here = False
+        if not self.record_running:
+            self.start_record()
+            started_record_here = True
+
+        time.sleep(1)
+
+        self.client_dash.MovL(-466.3269, -581.647, 222.1745,
                               -178.9742, -0.2927, 53.9894,0)
+        time.sleep(6)
+        self.epick_grip ()
+
         self.client_dash.MovL(-466.3269, -581.647, 436.1745,
                               -178.9742, -0.2927, 53.9894,0)
         self.client_dash.MovL(-466.3269, -581.647, 238.1745,
                               -178.9742, -0.2927, 53.9894,0)
-        # self.client_dash.MovJ(-86.1383, 24.5115, -96.7030,
-        #                            -17.2796, 89.8433, 120.0313,1)
+        time.sleep(3)
+        self.epick_release ()
+
+        time.sleep(2)
+        if started_record_here:
+            self.stop_record()
+
+        time.sleep(1)
+        self.joint_movj ()
         
 
 if __name__ == "__main__":
